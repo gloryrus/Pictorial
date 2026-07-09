@@ -9,6 +9,21 @@ build/
 src-tauri/target/
 target/
 
+# Release / installers
+*.exe
+*.msi
+*.dmg
+*.app
+*.AppImage
+*.deb
+*.rpm
+
+# Rust artifacts
+*.rlib
+*.rmeta
+*.lib
+*.pdb
+
 # Logs
 *.log
 npm-debug.log*
@@ -25,17 +40,9 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Editor folders
+# Editor settings
 .vscode/
 .idea/
 
-*.exe
-*.msi
-*.app
-*.dmg
-*.deb
-*.AppImage
-*.rlib
-*.rmeta
-*.lib
-*.pdb
+# Temporary / preview files
+src-tauri/icons/preview.png
