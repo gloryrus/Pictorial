@@ -28,3 +28,14 @@ Thumbs.db
 # Editor folders
 .vscode/
 .idea/
+
+*.exe
+*.msi
+*.app
+*.dmg
+*.deb
+*.AppImage
+*.rlib
+*.rmeta
+*.lib
+*.pdb
