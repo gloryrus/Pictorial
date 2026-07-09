@@ -30,22 +30,30 @@
     }
   },
     "bundle": {
-    "active": true,
-    "targets": ["nsis"],
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ],
-    "fileAssociations": [
-      {
-        "ext": ["jpg", "jpeg", "png", "gif", "bmp", "webp", "avif", "tiff"],
-        "name": "Pictorial",
-        "description": "Изображение",
-        "role": "Viewer"
-      }
-    ]
+  "active": true,
+  "targets": ["nsis"],
+  "icon": [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.icns",
+    "icons/icon.ico"
+  ],
+  "fileAssociations": [
+    {
+      "ext": ["jpg", "jpeg", "png", "gif", "bmp", "webp", "avif", "tif", "tiff"],
+      "name": "Pictorial Image",
+      "description": "Изображение",
+      "role": "Viewer",
+      "mimeType": "image/png"
+    },
+    {
+      "ext": ["mp4", "webm", "mkv", "mov", "avi", "m4v"],
+      "name": "Pictorial Video",
+      "description": "Видео",
+      "role": "Viewer",
+      "mimeType": "video/mp4"
+    }
+  ]
   }
 }
