@@ -90,9 +90,11 @@ fn list_folder_media(path: String) -> Result<FolderListing, String> {
 
 #[tauri::command]
 fn startup_file() -> Option<String> {
-    std::env::args()
+    std::env::args_os()
         .skip(1)
-        .find(|arg| !arg.starts_with('-') && is_supported_media(Path::new(arg)))
+        .map(PathBuf::from)
+        .find(|path| path.is_file() && is_supported_media(path))
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -104,6 +106,17 @@ fn disable_window_border(window: tauri::WebviewWindow) -> Result<(), String> {
     {
         let _ = window;
         Ok(())
+    }
+}
+
+#[tauri::command]
+fn set_window_topmost_clean(window: tauri::WebviewWindow, topmost: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return windows::set_window_topmost_clean(&window, topmost);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        window.set_always_on_top(topmost).map_err(|error| error.to_string())
     }
 }
 
@@ -134,10 +147,10 @@ mod windows {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-        SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_CLIENTEDGE,
-        WS_EX_DLGMODALFRAME, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-        WS_SYSMENU, WS_THICKFRAME,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION,
+        WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_WINDOWEDGE,
+        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
     fn hwnd(window: &tauri::WebviewWindow) -> Result<HWND, String> {
@@ -148,38 +161,27 @@ mod windows {
         }
     }
 
-    pub fn disable_window_border(window: &tauri::WebviewWindow) -> Result<(), String> {
-        const DWMWA_BORDER_COLOR: u32 = 34;
-        const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
-
-        let hwnd = hwnd(window)?;
-
+    fn clean_styles(hwnd: HWND) {
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            let clean_style = style & !(WS_CAPTION
-                | WS_THICKFRAME
-                | WS_BORDER
-                | WS_DLGFRAME
-                | WS_SYSMENU
-                | WS_MAXIMIZEBOX
-                | WS_MINIMIZEBOX);
-            SetWindowLongPtrW(hwnd, GWL_STYLE, clean_style as isize);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_STYLE,
+                (style & !(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX)) as isize,
+            );
 
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-            let clean_ex_style = ex_style & !(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clean_ex_style as isize);
-
-            SetWindowPos(
+            SetWindowLongPtrW(
                 hwnd,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                GWL_EXSTYLE,
+                (ex_style & !(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE)) as isize,
             );
         }
+    }
 
+    fn hide_dwm_border(hwnd: HWND) -> Result<(), String> {
+        const DWMWA_BORDER_COLOR: u32 = 34;
+        const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
         let color = DWMWA_COLOR_NONE;
         let result = unsafe {
             DwmSetWindowAttribute(
@@ -190,11 +192,36 @@ mod windows {
             )
         };
 
-        if result < 0 {
-            Err("DwmSetWindowAttribute failed".to_string())
-        } else {
-            Ok(())
+        if result < 0 { Err("DwmSetWindowAttribute failed".to_string()) } else { Ok(()) }
+    }
+
+    pub fn disable_window_border(window: &tauri::WebviewWindow) -> Result<(), String> {
+        let hwnd = hwnd(window)?;
+        clean_styles(hwnd);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
         }
+        hide_dwm_border(hwnd)
+    }
+
+    pub fn set_window_topmost_clean(window: &tauri::WebviewWindow, topmost: bool) -> Result<(), String> {
+        let hwnd = hwnd(window)?;
+        clean_styles(hwnd);
+        let insert_after = if topmost { -1isize as HWND } else { -2isize as HWND };
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                insert_after,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        hide_dwm_border(hwnd)
     }
 
     pub fn set_window_hit_regions(
@@ -257,9 +284,6 @@ pub fn run() {
             use tauri::Manager;
 
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_decorations(false);
-                let _ = window.set_resizable(false);
-
                 #[cfg(target_os = "windows")]
                 let _ = windows::disable_window_border(&window);
             }
@@ -269,6 +293,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             disable_window_border,
             list_folder_media,
+            set_window_topmost_clean,
             set_window_hit_regions,
             startup_file,
         ])

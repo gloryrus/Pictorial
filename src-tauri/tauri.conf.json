@@ -1,5 +1,6 @@
 {
-  "productName": "pictorial",
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pictorial",
   "version": "0.1.0",
   "identifier": "com.farika.pictorial",
   "build": {
@@ -10,50 +11,88 @@
   },
   "app": {
     "windows": [
-    {
-      "title": "Pictorial",
-      "width": 1100,
-      "height": 750,
-      "center": true,
-      "transparent": true,
-      "decorations": false,
-      "shadow": false,
-      "dragDropEnabled": true
-    }
-  ],
+      {
+        "title": "Pictorial",
+        "width": 1100,
+        "height": 750,
+        "center": true,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "dragDropEnabled": true,
+        "resizable": false
+      }
+    ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' asset: http://asset.localhost ipc: http://ipc.localhost;",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "**"
+        ]
       }
     }
   },
-    "bundle": {
-  "active": true,
-  "targets": ["nsis"],
-  "icon": [
-    "icons/32x32.png",
-    "icons/128x128.png",
-    "icons/128x128@2x.png",
-    "icons/icon.icns",
-    "icons/icon.ico"
-  ],
-  "fileAssociations": [
-    {
-      "ext": ["jpg", "jpeg", "png", "gif", "bmp", "webp", "avif", "tif", "tiff"],
-      "name": "Pictorial Image",
-      "description": "Изображение",
-      "role": "Viewer",
-      "mimeType": "image/png"
-    },
-    {
-      "ext": ["mp4", "webm", "mkv", "mov", "avi", "m4v"],
-      "name": "Pictorial Video",
-      "description": "Видео",
-      "role": "Viewer",
-      "mimeType": "video/mp4"
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "jpg",
+          "jpeg",
+          "png",
+          "gif",
+          "bmp",
+          "webp",
+          "avif",
+          "tif",
+          "tiff",
+          "svg"
+        ],
+        "name": "Pictorial Image",
+        "description": "Изображение",
+        "role": "Viewer",
+        "mimeType": "image/png"
+      },
+      {
+        "ext": [
+          "mp4",
+          "webm",
+          "mkv",
+          "mov",
+          "avi",
+          "m4v",
+          "wmv",
+          "mpg",
+          "mpeg",
+          "ogv",
+          "3gp",
+          "ts",
+          "m2ts"
+        ],
+        "name": "Pictorial Video",
+        "description": "Видео",
+        "role": "Viewer",
+        "mimeType": "video/mp4"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "startMenuFolder": "Pictorial",
+        "installerHooks": "nsis/hooks.nsh"
+      }
     }
-  ]
-  }
+  },
+  "mainBinaryName": "Pictorial"
 }

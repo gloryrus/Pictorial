@@ -58,6 +58,7 @@ export default function App() {
   const [videoPaused, setVideoPaused] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVolume, setVideoVolume] = useState(1);
+  const [videoError, setVideoError] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
   const [layoutSource, setLayoutSource] = useState<string | null>(null);
   const [overlayReady, setOverlayReady] = useState(false);
@@ -87,6 +88,14 @@ export default function App() {
 
   const mediaKind = useMemo(() => mediaKindOf(v.fileName), [v.fileName]);
   const isVideo = mediaKind === "video";
+
+  const keepNativeFrameOff = useCallback((delays = [0, 80, 220]) => {
+    for (const delay of delays) {
+      window.setTimeout(() => {
+        void invoke("disable_window_border").catch(() => undefined);
+      }, delay);
+    }
+  }, []);
 
   useEffect(() => { canvasRef.current = canvas; }, [canvas]);
   useEffect(() => { viewRef.current = view; }, [view]);
@@ -254,11 +263,10 @@ export default function App() {
     viewRef.current = { ...viewRef.current, center: startupCenter };
     setView((current) => ({ ...current, center: startupCenter }));
 
-    await win.setResizable(false).catch(() => undefined);
     await invoke("disable_window_border").catch(() => undefined);
     await win.setPosition(new PhysicalPosition(Math.round(union.x), Math.round(union.y)));
     await win.setSize(new LogicalSize(logical.w, logical.h));
-    await invoke("disable_window_border").catch(() => undefined);
+    keepNativeFrameOff();
 
     canvasRef.current = logical;
     setCanvas(logical);
@@ -267,8 +275,8 @@ export default function App() {
 
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await win.show().catch(() => undefined);
-    await invoke("disable_window_border").catch(() => undefined);
-  }, []);
+    keepNativeFrameOff();
+  }, [keepNativeFrameOff]);
 
   const centerOnActiveMonitor = useCallback((): Point => {
     const area = activeWorkArea();
@@ -473,9 +481,8 @@ export default function App() {
 
   const toggleLock = useCallback(async () => {
     const next = !locked;
-    await winRef.current.setAlwaysOnTop(next);
-
-    await winRef.current.setResizable(false).catch(() => undefined);
+    await invoke("set_window_topmost_clean", { topmost: next }).catch(() => undefined);
+    keepNativeFrameOff([40, 160, 320]);
 
     if (next) {
       dragRef.current = null;
@@ -486,7 +493,7 @@ export default function App() {
 
     setLocked(next);
     setMenu(null);
-  }, [locked]);
+  }, [keepNativeFrameOff, locked]);
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -586,6 +593,7 @@ export default function App() {
     setVideoDuration(0);
     setVideoTime(0);
     setVideoPaused(true);
+    setVideoError(false);
     setMediaReady(false);
     setLayoutSource(null);
 
@@ -824,6 +832,7 @@ export default function App() {
               onTimeUpdate={onVideoTimeUpdate}
               onPlay={() => setVideoPaused(false)}
               onPause={() => setVideoPaused(true)}
+              onError={() => setVideoError(true)}
               onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
             />
           ) : (
@@ -835,6 +844,9 @@ export default function App() {
               style={hasCurrentLayout ? imageStyle : hiddenMediaStyle}
               onLoad={onImgLoad}
             />
+          )}
+          {isVideo && videoError && (
+            <div className="video-error">Формат не поддерживается WebView2 или системой</div>
           )}
         </div>
       ) : (

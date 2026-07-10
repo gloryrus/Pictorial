@@ -144,3 +144,13 @@ git push -u origin main
 ## License
 
 MIT License.
+
+## Installer
+
+Windows build uses NSIS and installs Pictorial as a normal application with file associations for images and videos.
+
+```powershell
+npm run tauri build
+```
+
+The installer is created in `src-tauri/target/release/bundle/nsis/`.

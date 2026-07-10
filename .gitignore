@@ -1,15 +1,8 @@
-# Dependencies
 node_modules/
-
-# Frontend build
 dist/
 build/
-
-# Tauri / Rust build
 src-tauri/target/
 target/
-
-# Release / installers
 *.exe
 *.msi
 *.dmg
@@ -17,32 +10,16 @@ target/
 *.AppImage
 *.deb
 *.rpm
-
-# Rust artifacts
 *.rlib
 *.rmeta
 *.lib
 *.pdb
-
-# Logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Environment files
 .env
 .env.local
 .env.*.local
-
-# OS files
 .DS_Store
 Thumbs.db
-
-# Editor settings
 .vscode/
 .idea/
-
-# Temporary / preview files
 src-tauri/icons/preview.png
