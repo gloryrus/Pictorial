@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
@@ -39,6 +39,13 @@ type ApplyMediaSizeOptions = {
   provisional?: boolean;
 };
 
+type OverlaySnapshot = {
+  virtualRect: Rect;
+  workAreas: Rect[];
+  canvas: Size;
+  view: View;
+};
+
 export default function App() {
   const v = useViewer();
   const [rotation, setRotation] = useState(0);
@@ -48,7 +55,7 @@ export default function App() {
     scale: 1,
     center: { x: START_WINDOW_SIZE / 2, y: START_WINDOW_SIZE / 2 },
   });
-  const [isFs, setIsFs] = useState(false);
+  const [isFs] = useState(false);
   const [locked, setLocked] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hudActive, setHudActive] = useState(false);
@@ -62,6 +69,7 @@ export default function App() {
   const [mediaReady, setMediaReady] = useState(false);
   const [layoutSource, setLayoutSource] = useState<string | null>(null);
   const [overlayReady, setOverlayReady] = useState(false);
+  const [compactLock, setCompactLock] = useState(false);
 
   const winRef = useRef(getCurrentWindow());
   const sfRef = useRef(1);
@@ -78,6 +86,8 @@ export default function App() {
   const hudActiveRef = useRef(false);
   const hudHideTimerRef = useRef<number | null>(null);
   const overlayReadyRef = useRef(false);
+  const compactLockRef = useRef(false);
+  const overlaySnapshotRef = useRef<OverlaySnapshot | null>(null);
   const didPlaceFirstMediaRef = useRef(false);
   const regionRafRef = useRef<number | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +110,7 @@ export default function App() {
   useEffect(() => { canvasRef.current = canvas; }, [canvas]);
   useEffect(() => { viewRef.current = view; }, [view]);
   useEffect(() => { hudActiveRef.current = hudActive; }, [hudActive]);
+  useEffect(() => { compactLockRef.current = compactLock; }, [compactLock]);
 
   const logicalWorkAreas = useCallback((): Rect[] => {
     const sf = sfRef.current || 1;
@@ -132,36 +143,35 @@ export default function App() {
     return best;
   }, [logicalWorkAreas]);
 
-  const geometry = useMemo<Geometry | null>(() => {
-    if (!natural) return null;
+  const makeGeometryFor = useCallback((size: Size, nextRotation = rotation, point?: Point): Geometry => {
+    const rotated = nextRotation % 180 !== 0
+      ? { w: size.h, h: size.w }
+      : size;
 
-    const rotated = rotation % 180 !== 0
-      ? { w: natural.h, h: natural.w }
-      : natural;
-
-    const area = activeWorkArea();
+    const area = activeWorkArea(point);
     const fitW = area ? area.w * 0.88 : window.screen.availWidth * 0.88;
     const fitH = area ? area.h * 0.88 : window.screen.availHeight * 0.88;
     const base = Math.min(fitW / rotated.w, fitH / rotated.h, 1);
 
     const image = {
-      w: Math.max(1, natural.w * base),
-      h: Math.max(1, natural.h * base),
+      w: Math.max(1, size.w * base),
+      h: Math.max(1, size.h * base),
     };
 
-    const box = rotation % 180 !== 0
+    const box = nextRotation % 180 !== 0
       ? { w: image.h, h: image.w }
       : { ...image };
 
     return { image, box };
-  }, [natural, rotation, activeWorkArea, canvas]);
+  }, [activeWorkArea, rotation]);
 
-  useEffect(() => { geometryRef.current = geometry; }, [geometry]);
+  const geometry = useMemo<Geometry | null>(() => (
+    natural ? makeGeometryFor(natural, rotation) : null
+  ), [natural, rotation, makeGeometryFor]);
 
-  const keepViewVisible = useCallback((center: Point, scale: number): Point => {
-    const g = geometryRef.current;
-    if (!g) return center;
+  useLayoutEffect(() => { geometryRef.current = geometry; }, [geometry]);
 
+  const keepViewVisibleWithGeometry = useCallback((center: Point, scale: number, g: Geometry): Point => {
     const halfW = (g.box.w * scale) / 2;
     const halfH = (g.box.h * scale) / 2;
     const imageRect = {
@@ -202,6 +212,11 @@ export default function App() {
     };
   }, [logicalWorkAreas]);
 
+  const keepViewVisible = useCallback((center: Point, scale: number): Point => {
+    const g = geometryRef.current;
+    return g ? keepViewVisibleWithGeometry(center, scale, g) : center;
+  }, [keepViewVisibleWithGeometry]);
+
   const setViewSafe = useCallback((next: View) => {
     const safe: View = geometryRef.current
       ? { ...next, center: keepViewVisible(next.center, next.scale) }
@@ -210,6 +225,28 @@ export default function App() {
     viewRef.current = safe;
     setView(safe);
   }, [keepViewVisible]);
+
+  const mediaRectFor = useCallback((g = geometryRef.current, currentView = viewRef.current): Rect | null => {
+    if (!g) return null;
+    const w = Math.max(1, g.box.w * currentView.scale);
+    const h = Math.max(1, g.box.h * currentView.scale);
+    return {
+      x: currentView.center.x - w / 2,
+      y: currentView.center.y - h / 2,
+      w,
+      h,
+    };
+  }, []);
+
+  const setNativeBounds = useCallback((rect: Rect, topmost: boolean) => {
+    return invoke("set_window_bounds_clean", {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.max(1, Math.round(rect.w)),
+      height: Math.max(1, Math.round(rect.h)),
+      topmost,
+    }).catch(() => undefined).finally(() => keepNativeFrameOff([0, 80, 220]));
+  }, [keepNativeFrameOff]);
 
   const prepareStableOverlay = useCallback(async () => {
     const win = winRef.current;
@@ -343,17 +380,11 @@ export default function App() {
     const g = geometryRef.current;
     const currentView = viewRef.current;
 
-    if (g && v.currentSrc && layoutSource === v.currentSrc) {
-      const imageRect = intersectRects(
-        {
-          x: currentView.center.x - (g.box.w * currentView.scale) / 2,
-          y: currentView.center.y - (g.box.h * currentView.scale) / 2,
-          w: g.box.w * currentView.scale,
-          h: g.box.h * currentView.scale,
-        },
-        canvasRect,
-      );
-
+    if (compactLockRef.current && g && v.currentSrc && layoutSource === v.currentSrc) {
+      rects.push(canvasRect);
+    } else if (g && v.currentSrc && layoutSource === v.currentSrc) {
+      const mediaRect = mediaRectFor(g, currentView);
+      const imageRect = mediaRect ? intersectRects(mediaRect, canvasRect) : null;
       if (imageRect) rects.push(imageRect);
     } else if (overlayReadyRef.current && openButtonRef.current) {
       const openRect = intersectRects(domRectToRect(openButtonRef.current.getBoundingClientRect()), canvasRect);
@@ -380,7 +411,7 @@ export default function App() {
     }));
 
     void invoke("set_window_hit_regions", { rects: physicalRects }).catch(() => undefined);
-  }, [layoutSource, menu, showHud, v.currentSrc]);
+  }, [layoutSource, mediaRectFor, menu, showHud, v.currentSrc]);
 
   const scheduleHitRegion = useCallback(() => {
     if (regionRafRef.current !== null) cancelAnimationFrame(regionRafRef.current);
@@ -391,9 +422,37 @@ export default function App() {
     });
   }, [applyHitRegionNow]);
 
+  const refreshWindowShape = useCallback((delays = [0, 32, 120, 300]) => {
+    for (const delay of delays) {
+      window.setTimeout(() => {
+        void invoke("disable_window_border").catch(() => undefined);
+        scheduleHitRegion();
+      }, delay);
+    }
+  }, [scheduleHitRegion]);
+
   useEffect(() => {
     scheduleHitRegion();
   }, [canvas, view, geometry, showHud, menu, v.currentSrc, layoutSource, overlayReady, scheduleHitRegion]);
+
+  useEffect(() => {
+    const refresh = () => refreshWindowShape();
+    const onVisibilityChange = () => {
+      if (!document.hidden) refresh();
+    };
+
+    window.addEventListener("focus", refresh, true);
+    window.addEventListener("pageshow", refresh);
+    window.addEventListener("resize", refresh);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", refresh, true);
+      window.removeEventListener("pageshow", refresh);
+      window.removeEventListener("resize", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshWindowShape]);
 
   useEffect(() => {
     void prepareStableOverlay();
@@ -407,15 +466,23 @@ export default function App() {
     };
   }, [prepareStableOverlay]);
 
-  useEffect(() => {
-    if (!geometry || !overlayReadyRef.current || !mediaReady) return;
+  useLayoutEffect(() => {
+    if (!geometry || !overlayReadyRef.current || !v.currentSrc || layoutSource !== v.currentSrc) return;
 
     const current = viewRef.current;
-    setViewSafe({
-      scale: clamp(targetScaleRef.current || current.scale, MIN_SCALE, MAX_SCALE),
-      center: current.center,
-    });
-  }, [geometry, mediaReady, setViewSafe]);
+    const nextScale = clamp(targetScaleRef.current || current.scale, MIN_SCALE, MAX_SCALE);
+    const nextCenter = keepViewVisibleWithGeometry(current.center, nextScale, geometry);
+
+    if (
+      Math.abs(nextScale - current.scale) > ZOOM_EPS ||
+      Math.abs(nextCenter.x - current.center.x) > 0.5 ||
+      Math.abs(nextCenter.y - current.center.y) > 0.5
+    ) {
+      const safe = { scale: nextScale, center: nextCenter };
+      viewRef.current = safe;
+      setView(safe);
+    }
+  }, [geometry, keepViewVisibleWithGeometry, layoutSource, v.currentSrc]);
 
   const zoomAnimationStep = useCallback(() => {
     zoomRafRef.current = null;
@@ -473,27 +540,80 @@ export default function App() {
     fitCurrentImage(1);
   }, [fitCurrentImage]);
 
-  const toggleFullscreen = useCallback(async () => {
-    const next = !isFs;
-    await winRef.current.setFullscreen(next);
-    setIsFs(next);
-  }, [isFs]);
-
   const toggleLock = useCallback(async () => {
     const next = !locked;
-    await invoke("set_window_topmost_clean", { topmost: next }).catch(() => undefined);
-    keepNativeFrameOff([40, 160, 320]);
 
     if (next) {
+      const mediaRect = mediaRectFor();
+      const g = geometryRef.current;
+      const currentView = viewRef.current;
+
+      if (mediaRect && g) {
+        overlaySnapshotRef.current = {
+          virtualRect: { ...virtualRectRef.current },
+          workAreas: [...workAreasRef.current],
+          canvas: { ...canvasRef.current },
+          view: { scale: currentView.scale, center: { ...currentView.center } },
+        };
+
+        const sf = sfRef.current || 1;
+        const nativeRect = {
+          x: virtualRectRef.current.x + mediaRect.x * sf,
+          y: virtualRectRef.current.y + mediaRect.y * sf,
+          w: mediaRect.w * sf,
+          h: mediaRect.h * sf,
+        };
+        const compactCanvas = { w: mediaRect.w, h: mediaRect.h };
+        const compactView = {
+          scale: currentView.scale,
+          center: { x: mediaRect.w / 2, y: mediaRect.h / 2 },
+        };
+
+        compactLockRef.current = true;
+        setCompactLock(true);
+        virtualRectRef.current = nativeRect;
+        canvasRef.current = compactCanvas;
+        viewRef.current = compactView;
+        setCanvas(compactCanvas);
+        setView(compactView);
+        await setNativeBounds(nativeRect, true);
+      } else {
+        await invoke("set_window_topmost_clean", { topmost: true }).catch(() => undefined);
+      }
+
       dragRef.current = null;
       hudActiveRef.current = false;
       setDragging(false);
       setHudActive(false);
+      setLocked(true);
+      setMenu(null);
+      scheduleHitRegion();
+      keepNativeFrameOff([0, 80, 200, 420]);
+      return;
     }
 
-    setLocked(next);
+    const snapshot = overlaySnapshotRef.current;
+    overlaySnapshotRef.current = null;
+    compactLockRef.current = false;
+    setCompactLock(false);
+    setLocked(false);
     setMenu(null);
-  }, [keepNativeFrameOff, locked]);
+
+    if (snapshot) {
+      virtualRectRef.current = { ...snapshot.virtualRect };
+      workAreasRef.current = [...snapshot.workAreas];
+      canvasRef.current = { ...snapshot.canvas };
+      viewRef.current = { scale: snapshot.view.scale, center: { ...snapshot.view.center } };
+      setCanvas(snapshot.canvas);
+      setView(snapshot.view);
+      await setNativeBounds(snapshot.virtualRect, false);
+    } else {
+      await invoke("set_window_topmost_clean", { topmost: false }).catch(() => undefined);
+    }
+
+    scheduleHitRegion();
+    keepNativeFrameOff([0, 80, 200, 420]);
+  }, [keepNativeFrameOff, locked, mediaRectFor, scheduleHitRegion, setNativeBounds]);
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -574,12 +694,18 @@ export default function App() {
 
   const applyNewMediaSize = useCallback((size: Size, options: ApplyMediaSizeOptions = {}) => {
     const firstMedia = !didPlaceFirstMediaRef.current;
-    const nextCenter = firstMedia ? centerOnActiveMonitor() : viewRef.current.center;
-    const nextView = { scale: 1, center: nextCenter };
+    const scale = 1;
+    const rawCenter = firstMedia ? centerOnActiveMonitor() : viewRef.current.center;
+    const nextGeometry = makeGeometryFor(size, 0, rawCenter);
+    const nextView = {
+      scale,
+      center: keepViewVisibleWithGeometry(rawCenter, scale, nextGeometry),
+    };
 
     didPlaceFirstMediaRef.current = true;
-    targetScaleRef.current = 1;
+    targetScaleRef.current = scale;
     anchorRef.current = null;
+    geometryRef.current = nextGeometry;
     viewRef.current = nextView;
 
     setRotation(0);
@@ -587,7 +713,7 @@ export default function App() {
     setNatural(size);
     setLayoutSource(v.currentSrc ?? null);
     setMediaReady(!options.provisional);
-  }, [centerOnActiveMonitor, v.currentSrc]);
+  }, [centerOnActiveMonitor, keepViewVisibleWithGeometry, makeGeometryFor, v.currentSrc]);
 
   useEffect(() => {
     setVideoDuration(0);
@@ -679,45 +805,74 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const zoomInKeys = ["Equal", "NumpadAdd"];
+    const zoomOutKeys = ["Minus", "NumpadSubtract"];
+    const resetKeys = ["Digit0", "Numpad0"];
+    const zoomKeys = [...zoomInKeys, ...zoomOutKeys, ...resetKeys];
+
+    const blockKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+
     const onKey = (e: KeyboardEvent) => {
+      const isFunctionKey = /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(e.code);
+      const hasModifier = e.ctrlKey || e.altKey || e.metaKey || e.shiftKey;
+      const isAllowedCtrlZoom = e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && zoomKeys.includes(e.code);
+
+      if (isFunctionKey || (hasModifier && !isAllowedCtrlZoom)) {
+        blockKey(e);
+        return;
+      }
+
       if (locked) {
         if (e.code === "Escape") setMenu(null);
-        e.preventDefault();
+        blockKey(e);
         return;
       }
 
       switch (e.code) {
-        case "ArrowRight": v.next(); break;
-        case "ArrowLeft": v.prev(); break;
-        case "Home": v.first(); break;
-        case "End": v.last(); break;
+        case "ArrowRight":
+          e.preventDefault();
+          v.next();
+          break;
+
+        case "ArrowLeft":
+          e.preventDefault();
+          v.prev();
+          break;
+
+        case "Home":
+          e.preventDefault();
+          v.first();
+          break;
+
+        case "End":
+          e.preventDefault();
+          v.last();
+          break;
 
         case "KeyR":
+          e.preventDefault();
           setRotation((r) => (r + 90) % 360);
           break;
 
         case "Equal":
         case "NumpadAdd":
-          if (e.ctrlKey) {
-            e.preventDefault();
-            zoomBy(1.14);
-          }
+          e.preventDefault();
+          zoomBy(1.14);
           break;
 
         case "Minus":
         case "NumpadSubtract":
-          if (e.ctrlKey) {
-            e.preventDefault();
-            zoomBy(1 / 1.14);
-          }
+          e.preventDefault();
+          zoomBy(1 / 1.14);
           break;
 
         case "Digit0":
         case "Numpad0":
-          if (e.ctrlKey) {
-            e.preventDefault();
-            reset();
-          }
+          e.preventDefault();
+          reset();
           break;
 
         case "Space":
@@ -727,23 +882,17 @@ export default function App() {
           }
           break;
 
-        case "F11":
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-
         case "Escape":
-          winRef.current.setFullscreen(false);
-          setIsFs(false);
+          e.preventDefault();
           setMenu(null);
           stopDrag();
           break;
       }
     };
 
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [v, locked, reset, toggleFullscreen, zoomBy, isVideo, toggleVideoPlay]);
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [v, locked, reset, zoomBy, isVideo, toggleVideoPlay]);
 
   const stageStyle: React.CSSProperties | undefined = geometry ? {
     width: `${geometry.box.w}px`,
@@ -796,7 +945,7 @@ export default function App() {
   } : undefined;
 
   const menuStyle = menu ? { left: menu.x, top: menu.y } : undefined;
-  const viewerClass = ["viewer", dragging ? "dragging" : "", locked ? "locked" : ""].filter(Boolean).join(" ");
+  const viewerClass = ["viewer", dragging ? "dragging" : "", locked ? "locked" : "", compactLock ? "compact-lock" : ""].filter(Boolean).join(" ");
 
   return (
     <div

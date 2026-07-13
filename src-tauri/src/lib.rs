@@ -121,6 +121,27 @@ fn set_window_topmost_clean(window: tauri::WebviewWindow, topmost: bool) -> Resu
 }
 
 #[tauri::command]
+fn set_window_bounds_clean(
+    window: tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    topmost: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    return windows::set_window_bounds_clean(&window, x, y, width, height, topmost);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use tauri::{PhysicalPosition, PhysicalSize};
+        window.set_position(PhysicalPosition::new(x, y)).map_err(|error| error.to_string())?;
+        window.set_size(PhysicalSize::new(width, height)).map_err(|error| error.to_string())?;
+        window.set_always_on_top(topmost).map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
 fn set_window_hit_regions(
     window: tauri::WebviewWindow,
     rects: Vec<HitRegionRect>,
@@ -149,7 +170,7 @@ mod windows {
         GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
         SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION,
-        WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_WINDOWEDGE,
+        WS_DLGFRAME, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_WINDOWEDGE,
         WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
     };
 
@@ -167,14 +188,17 @@ mod windows {
             SetWindowLongPtrW(
                 hwnd,
                 GWL_STYLE,
-                (style & !(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX)) as isize,
+                ((style & !(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_MAXIMIZEBOX))
+                    | WS_SYSMENU
+                    | WS_MINIMIZEBOX) as isize,
             );
 
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
             SetWindowLongPtrW(
                 hwnd,
                 GWL_EXSTYLE,
-                (ex_style & !(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE)) as isize,
+                ((ex_style & !(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE))
+                    | WS_EX_APPWINDOW) as isize,
             );
         }
     }
@@ -219,6 +243,31 @@ mod windows {
                 insert_after,
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        hide_dwm_border(hwnd)
+    }
+
+    pub fn set_window_bounds_clean(
+        window: &tauri::WebviewWindow,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        topmost: bool,
+    ) -> Result<(), String> {
+        let hwnd = hwnd(window)?;
+        clean_styles(hwnd);
+        let insert_after = if topmost { -1isize as HWND } else { -2isize as HWND };
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                insert_after,
+                x,
+                y,
+                width as i32,
+                height as i32,
+                SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
         }
         hide_dwm_border(hwnd)
@@ -294,6 +343,7 @@ pub fn run() {
             disable_window_border,
             list_folder_media,
             set_window_topmost_clean,
+            set_window_bounds_clean,
             set_window_hit_regions,
             startup_file,
         ])
