@@ -46,6 +46,65 @@ type OverlaySnapshot = {
   view: View;
 };
 
+type VideoPreferences = {
+  playbackRate: number;
+  volume: number;
+};
+
+const VIDEO_PREFERENCES_STORAGE_KEY = "pictorial.videoPreferences";
+const DEFAULT_VIDEO_PREFERENCES: VideoPreferences = {
+  playbackRate: 1,
+  volume: 1,
+};
+
+const isSupportedPlaybackRate = (rate: number): rate is typeof VIDEO_SPEEDS[number] => (
+  VIDEO_SPEEDS.includes(rate as typeof VIDEO_SPEEDS[number])
+);
+
+const readVideoPreferences = (): VideoPreferences => {
+  if (typeof window === "undefined") {
+    return DEFAULT_VIDEO_PREFERENCES;
+  }
+
+  try {
+    const storage = window.localStorage;
+    const raw = storage.getItem(VIDEO_PREFERENCES_STORAGE_KEY);
+    if (!raw) return DEFAULT_VIDEO_PREFERENCES;
+
+    const parsed = JSON.parse(raw) as Partial<VideoPreferences> | null;
+    const storedRate = parsed?.playbackRate;
+    const storedVolume = parsed?.volume;
+
+    return {
+      playbackRate: typeof storedRate === "number" && isSupportedPlaybackRate(storedRate)
+        ? storedRate
+        : DEFAULT_VIDEO_PREFERENCES.playbackRate,
+      volume: typeof storedVolume === "number" && Number.isFinite(storedVolume)
+        ? clamp(storedVolume, 0, 1)
+        : DEFAULT_VIDEO_PREFERENCES.volume,
+    };
+  } catch {
+    return DEFAULT_VIDEO_PREFERENCES;
+  }
+};
+
+const saveVideoPreferences = (preferences: VideoPreferences) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    const storage = window.localStorage;
+    storage.setItem(
+      VIDEO_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        playbackRate: preferences.playbackRate,
+        volume: preferences.volume,
+      }),
+    );
+  } catch {
+    void 0;
+  }
+};
+
 export default function App() {
   const v = useViewer();
   const [rotation, setRotation] = useState(0);
@@ -60,11 +119,12 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [hudActive, setHudActive] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const initialVideoPreferences = useMemo(readVideoPreferences, []);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
   const [videoPaused, setVideoPaused] = useState(true);
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const [videoVolume, setVideoVolume] = useState(1);
+  const [playbackRate, setPlaybackRate] = useState(initialVideoPreferences.playbackRate);
+  const [videoVolume, setVideoVolume] = useState(initialVideoPreferences.volume);
   const [videoError, setVideoError] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
   const [layoutSource, setLayoutSource] = useState<string | null>(null);
@@ -95,6 +155,7 @@ export default function App() {
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaSizeCacheRef = useRef(new Map<string, Size>());
+  const videoPreferencesRef = useRef(initialVideoPreferences);
 
   const mediaKind = useMemo(() => mediaKindOf(v.fileName), [v.fileName]);
   const isVideo = mediaKind === "video";
@@ -787,8 +848,11 @@ export default function App() {
   }, []);
 
   const changePlaybackRate = useCallback((rate: number) => {
-    const nextRate = VIDEO_SPEEDS.includes(rate as typeof VIDEO_SPEEDS[number]) ? rate : 1;
+    const nextRate = isSupportedPlaybackRate(rate) ? rate : DEFAULT_VIDEO_PREFERENCES.playbackRate;
+    const nextPreferences = { ...videoPreferencesRef.current, playbackRate: nextRate };
+    videoPreferencesRef.current = nextPreferences;
     setPlaybackRate(nextRate);
+    saveVideoPreferences(nextPreferences);
 
     if (videoRef.current) {
       videoRef.current.playbackRate = nextRate;
@@ -797,7 +861,10 @@ export default function App() {
 
   const changeVideoVolume = useCallback((volume: number) => {
     const nextVolume = clamp(volume, 0, 1);
+    const nextPreferences = { ...videoPreferencesRef.current, volume: nextVolume };
+    videoPreferencesRef.current = nextPreferences;
     setVideoVolume(nextVolume);
+    saveVideoPreferences(nextPreferences);
 
     if (videoRef.current) {
       videoRef.current.volume = nextVolume;
